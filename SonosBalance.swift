@@ -184,6 +184,11 @@ struct BalanceView: View {
                 try? await Task.sleep(for: .seconds(model.state == nil ? 1 : 3))
             }
         }
+        // The menu bar window is hidden, not closed, so the view stays alive between opens.
+        // Its window becomes key each time the menu opens.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            Task { await model.refresh() }
+        }
     }
 }
 
