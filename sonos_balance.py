@@ -29,10 +29,7 @@ def discover_speakers_by_name() -> dict[str, soco.SoCo]:
 def load_calibration(speakers_by_name: dict[str, soco.SoCo]) -> dict:
     if CALIBRATION_PATH.exists():
         return json.loads(CALIBRATION_PATH.read_text())
-    # First run: treat the current volumes as a matched pair, so the curve starts from what you hear now.
-    current_volumes = {name: speaker.volume for name, speaker in speakers_by_name.items()}
-    seed_master = max(current_volumes.values()) or 30
-    return {"master": seed_master, "points": [{"master": seed_master, "volumes": current_volumes}]}
+    return {"master": max(speaker.volume for speaker in speakers_by_name.values()), "points": []}
 
 
 def save_calibration(calibration: dict) -> None:
@@ -57,6 +54,17 @@ def volume_for_speaker(points: list[dict], speaker_name: str, master: int) -> in
     fraction = (master - low_master) / (high_master - low_master)
     volume = low_volume + fraction * (high_volume - low_volume)
     return max(0, min(100, round(volume)))
+
+
+def highest_balanced_master(points: list[dict], speaker_names: list[str]) -> int:
+    """The master level where the first speaker reaches 100.
+
+    Above it, that speaker cannot get louder while the others can, so the balance breaks.
+    """
+    for master in range(101):
+        if any(volume_for_speaker(points, name, master) >= 100 for name in speaker_names):
+            return master
+    return 100
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -88,6 +96,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(self.state())
 
     def set_master(self, master: int) -> None:
+        master = min(master, highest_balanced_master(self.calibration["points"], list(self.speakers_by_name)))
         self.calibration["master"] = master
         for name, speaker in self.speakers_by_name.items():
             speaker.volume = volume_for_speaker(self.calibration["points"], name, master)
@@ -105,6 +114,7 @@ class Handler(BaseHTTPRequestHandler):
         return {
             "master": self.calibration["master"],
             "points": self.calibration["points"],
+            "max_master": highest_balanced_master(self.calibration["points"], list(self.speakers_by_name)),
             "speakers": [
                 {"name": name, "volume": speaker.volume} for name, speaker in self.speakers_by_name.items()
             ],
@@ -149,12 +159,12 @@ PAGE_HTML = """<!doctype html>
   <section>
     <div class="master-value" id="master-value">–</div>
     <input type="range" id="master" min="0" max="100">
-    <div class="hint">Master volume. Use ← → keys for single steps.</div>
+    <div class="hint">Master volume. Use ← → keys for single steps. The slider stops where the first speaker reaches 100.</div>
   </section>
   <section>
     <div id="speakers"></div>
     <div class="row"><button class="primary" id="save">Save match at this level</button><button id="reset">Reset curve</button></div>
-    <p class="hint">To calibrate: set the master level, nudge each speaker until both sound equally loud, then save. Save matches at a low, a middle and a high level for a good curve.</p>
+    <p class="hint">To calibrate: set the master level, nudge each speaker until both sound equally loud, then save. Save matches at a low and a middle level. Higher levels are extended from those.</p>
     <div class="points" id="points"></div>
   </section>
 </main>
@@ -168,6 +178,7 @@ async function post(path, body) {
 }
 
 function render(state) {
+  masterSlider.max = state.max_master;
   if (!masterRequestInFlight) masterSlider.value = state.master;
   document.getElementById("master-value").textContent = masterSlider.value;
   document.getElementById("speakers").innerHTML = state.speakers.map(s => `
