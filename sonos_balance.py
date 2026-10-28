@@ -2,10 +2,10 @@
 # requires-python = ">=3.11"
 # dependencies = ["soco>=0.30"]
 # ///
-"""One master volume for grouped Sonos speakers that get loud at different rates.
+"""One volume slider for grouped Sonos speakers that get loud at different rates.
 
-Each speaker gets its own volume from a calibration curve. You build the curve by ear:
-set the master level, adjust each speaker until they sound equal, then save the match.
+You save pairs of volumes that sound equally loud. The slider walks along those pairs,
+one volume step at a time, so the speakers stay balanced at every position.
 """
 
 import json
@@ -26,50 +26,66 @@ def discover_speakers_by_name() -> dict[str, soco.SoCo]:
     return {speaker.player_name: speaker for speaker in speakers}
 
 
-def load_calibration(speakers_by_name: dict[str, soco.SoCo]) -> dict:
+def load_pairs() -> list[dict[str, int]]:
     if CALIBRATION_PATH.exists():
-        return json.loads(CALIBRATION_PATH.read_text())
-    return {"master": max(speaker.volume for speaker in speakers_by_name.values()), "points": []}
+        return json.loads(CALIBRATION_PATH.read_text())["pairs"]
+    return []
 
 
-def save_calibration(calibration: dict) -> None:
-    CALIBRATION_PATH.write_text(json.dumps(calibration, indent=2, ensure_ascii=False))
+def save_pairs(pairs: list[dict[str, int]]) -> None:
+    CALIBRATION_PATH.write_text(json.dumps({"pairs": pairs}, indent=2, ensure_ascii=False))
 
 
-def volume_for_speaker(points: list[dict], speaker_name: str, master: int) -> int:
-    """Linear interpolation over the saved points, with (0, 0) as an implicit point.
+def is_quieter_or_equal(pair: dict[str, int], other: dict[str, int]) -> bool:
+    return all(pair[name] <= other[name] for name in pair)
 
-    Above the highest point, the last segment is extended and the result is clamped to 100.
+
+def add_pair(pairs: list[dict[str, int]], new_pair: dict[str, int]) -> list[dict[str, int]]:
+    """Add a pair and drop the old pairs that contradict it.
+
+    A pair contradicts the new one when one speaker is louder and the other is quieter,
+    because then the slider could not go up on both speakers at once.
     """
-    curve = [(0, 0)] + sorted(
-        (point["master"], point["volumes"][speaker_name])
-        for point in points
-        if speaker_name in point["volumes"] and point["master"] > 0
+    consistent_pairs = [
+        pair
+        for pair in pairs
+        if pair != new_pair and (is_quieter_or_equal(pair, new_pair) or is_quieter_or_equal(new_pair, pair))
+    ]
+    return sorted(consistent_pairs + [new_pair], key=lambda pair: sum(pair.values()))
+
+
+def build_volume_steps(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, int]]:
+    """Every slider position, from silent to the point where the first speaker reaches 100.
+
+    Between two pairs, the speaker that changes most moves one volume step per slider step
+    and the other speakers follow in proportion. Above the loudest pair, the volume ratio
+    of that pair continues.
+    """
+    if not pairs:
+        return [{name: volume for name in speaker_names} for volume in range(101)]
+    loudest_pair = pairs[-1]
+    scale_to_max = 100 / max(loudest_pair.values())
+    top_pair = {name: round(loudest_pair[name] * scale_to_max) for name in speaker_names}
+    anchors = [{name: 0 for name in speaker_names}] + pairs + [top_pair]
+    steps = [anchors[0]]
+    for start, end in zip(anchors, anchors[1:]):
+        step_count = max(abs(end[name] - start[name]) for name in speaker_names)
+        for step in range(1, step_count + 1):
+            fraction = step / step_count
+            steps.append({name: round(start[name] + fraction * (end[name] - start[name])) for name in speaker_names})
+    return steps
+
+
+def nearest_step_index(steps: list[dict[str, int]], volumes: dict[str, int]) -> int:
+    return min(
+        range(len(steps)),
+        key=lambda index: sum(abs(steps[index][name] - volumes[name]) for name in volumes),
     )
-    if len(curve) == 1:
-        return master
-    for (low_master, low_volume), (high_master, high_volume) in zip(curve, curve[1:]):
-        if master <= high_master:
-            break
-    fraction = (master - low_master) / (high_master - low_master)
-    volume = low_volume + fraction * (high_volume - low_volume)
-    return max(0, min(100, round(volume)))
-
-
-def highest_balanced_master(points: list[dict], speaker_names: list[str]) -> int:
-    """The master level where the first speaker reaches 100.
-
-    Above it, that speaker cannot get louder while the others can, so the balance breaks.
-    """
-    for master in range(101):
-        if any(volume_for_speaker(points, name, master) >= 100 for name in speaker_names):
-            return master
-    return 100
 
 
 class Handler(BaseHTTPRequestHandler):
     speakers_by_name: dict[str, soco.SoCo]
-    calibration: dict
+    pairs: list[dict[str, int]]
 
     def do_GET(self):
         if self.path == "/":
@@ -81,43 +97,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        if self.path == "/api/master":
-            self.set_master(int(body["master"]))
+        if self.path == "/api/position":
+            self.set_volumes(self.volume_steps()[int(body["position"])])
         elif self.path == "/api/speaker":
             self.speakers_by_name[body["name"]].volume = int(body["volume"])
-        elif self.path == "/api/save-match":
-            self.save_match()
+        elif self.path == "/api/save-pair":
+            Handler.pairs = add_pair(self.pairs, self.current_volumes())
+            save_pairs(self.pairs)
+        elif self.path == "/api/delete-pair":
+            del self.pairs[int(body["index"])]
+            save_pairs(self.pairs)
         elif self.path == "/api/reset":
-            self.calibration["points"] = []
-            save_calibration(self.calibration)
+            Handler.pairs = []
+            save_pairs(self.pairs)
         else:
             self.send_error(404)
             return
         self.send_json(self.state())
 
-    def set_master(self, master: int) -> None:
-        master = min(master, highest_balanced_master(self.calibration["points"], list(self.speakers_by_name)))
-        self.calibration["master"] = master
-        for name, speaker in self.speakers_by_name.items():
-            speaker.volume = volume_for_speaker(self.calibration["points"], name, master)
-        save_calibration(self.calibration)
+    def volume_steps(self) -> list[dict[str, int]]:
+        return build_volume_steps(self.pairs, list(self.speakers_by_name))
 
-    def save_match(self) -> None:
-        master = self.calibration["master"]
-        current_volumes = {name: speaker.volume for name, speaker in self.speakers_by_name.items()}
-        self.calibration["points"] = [p for p in self.calibration["points"] if p["master"] != master]
-        self.calibration["points"].append({"master": master, "volumes": current_volumes})
-        self.calibration["points"].sort(key=lambda point: point["master"])
-        save_calibration(self.calibration)
+    def current_volumes(self) -> dict[str, int]:
+        return {name: speaker.volume for name, speaker in self.speakers_by_name.items()}
+
+    def set_volumes(self, volumes: dict[str, int]) -> None:
+        for name, volume in volumes.items():
+            self.speakers_by_name[name].volume = volume
 
     def state(self) -> dict:
+        steps = self.volume_steps()
+        current_volumes = self.current_volumes()
         return {
-            "master": self.calibration["master"],
-            "points": self.calibration["points"],
-            "max_master": highest_balanced_master(self.calibration["points"], list(self.speakers_by_name)),
-            "speakers": [
-                {"name": name, "volume": speaker.volume} for name, speaker in self.speakers_by_name.items()
-            ],
+            "position": nearest_step_index(steps, current_volumes),
+            "max_position": len(steps) - 1,
+            "pairs": self.pairs,
+            "speakers": [{"name": name, "volume": volume} for name, volume in current_volumes.items()],
         }
 
     def send_json(self, data: dict) -> None:
@@ -143,34 +158,39 @@ PAGE_HTML = """<!doctype html>
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
   main { max-width: 520px; margin: 0 auto; padding: 24px 16px; }
   h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
   section { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .row { display: flex; align-items: center; gap: 12px; }
   .row + .row { margin-top: 12px; }
   .label { flex: 1; }
   .value { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
-  .master-value { font-size: 40px; font-weight: 600; font-variant-numeric: tabular-nums; }
   button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--muted); background: transparent; color: var(--fg); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .hint, .points { color: var(--muted); font-size: 14px; }
+  .hint { color: var(--muted); font-size: 14px; }
+  ul { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
+  li { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+  li button { padding: 2px 8px; }
 </style></head>
 <body><main>
   <h1>Sonos Balance</h1>
   <section>
-    <div class="master-value" id="master-value">–</div>
-    <input type="range" id="master" min="0" max="100">
-    <div class="hint">Master volume. Use ← → keys for single steps. The slider stops where the first speaker reaches 100.</div>
+    <input type="range" id="volume" min="0" step="1">
+    <div class="hint">Use ← → keys for single steps. The slider stops where the first speaker reaches 100.</div>
   </section>
   <section>
     <div id="speakers"></div>
-    <div class="row"><button class="primary" id="save">Save match at this level</button><button id="reset">Reset curve</button></div>
-    <p class="hint">To calibrate: set the master level, nudge each speaker until both sound equally loud, then save. Save matches at a low and a middle level. Higher levels are extended from those.</p>
-    <div class="points" id="points"></div>
+    <div class="row"><button class="primary" id="save">Save pair</button><button id="reset">Delete all pairs</button></div>
+    <p class="hint">To calibrate: nudge each speaker until both sound equally loud, then save the pair. Louder levels continue the ratio of your loudest pair.</p>
+  </section>
+  <section>
+    <h2>Saved pairs</h2>
+    <ul id="pairs"></ul>
   </section>
 </main>
 <script>
-const masterSlider = document.getElementById("master");
-let masterRequestInFlight = false, pendingMaster = null;
+const volumeSlider = document.getElementById("volume");
+let positionRequestInFlight = false, pendingPosition = null;
 
 async function post(path, body) {
   const response = await fetch(path, { method: "POST", body: JSON.stringify(body || {}) });
@@ -178,9 +198,8 @@ async function post(path, body) {
 }
 
 function render(state) {
-  masterSlider.max = state.max_master;
-  if (!masterRequestInFlight) masterSlider.value = state.master;
-  document.getElementById("master-value").textContent = masterSlider.value;
+  volumeSlider.max = state.max_position;
+  if (!positionRequestInFlight) volumeSlider.value = state.position;
   document.getElementById("speakers").innerHTML = state.speakers.map(s => `
     <div class="row">
       <span class="label">${s.name}</span>
@@ -188,35 +207,38 @@ function render(state) {
       <span class="value">${s.volume}</span>
       <button data-name="${s.name}" data-step="1">+</button>
     </div>`).join("");
-  document.getElementById("points").textContent = state.points.length
-    ? "Saved matches: " + state.points.map(p => `master ${p.master} → ` + Object.entries(p.volumes).map(([n, v]) => `${n} ${v}`).join(", ")).join(" · ")
-    : "No saved matches. Both speakers follow the master directly.";
+  document.getElementById("pairs").innerHTML = state.pairs.length
+    ? state.pairs.map((pair, index) => `
+        <li><span>${Object.entries(pair).map(([name, volume]) => `${name} ${volume}`).join(" · ")}</span>
+        <button data-delete="${index}">×</button></li>`).join("")
+    : `<li class="hint">No pairs yet. Both speakers use the same volume.</li>`;
   window.currentSpeakers = state.speakers;
 }
 
-// Send at most one master request at a time; keep only the newest value while waiting.
-async function sendMaster(value) {
-  if (masterRequestInFlight) { pendingMaster = value; return; }
-  masterRequestInFlight = true;
-  await post("/api/master", { master: value });
-  masterRequestInFlight = false;
-  if (pendingMaster !== null) { const next = pendingMaster; pendingMaster = null; sendMaster(next); }
+// Send at most one position request at a time; keep only the newest value while waiting.
+async function sendPosition(position) {
+  if (positionRequestInFlight) { pendingPosition = position; return; }
+  positionRequestInFlight = true;
+  await post("/api/position", { position });
+  positionRequestInFlight = false;
+  if (pendingPosition !== null) { const next = pendingPosition; pendingPosition = null; sendPosition(next); }
 }
 
-masterSlider.addEventListener("input", () => {
-  document.getElementById("master-value").textContent = masterSlider.value;
-  sendMaster(Number(masterSlider.value));
-});
+volumeSlider.addEventListener("input", () => sendPosition(Number(volumeSlider.value)));
 document.getElementById("speakers").addEventListener("click", event => {
   const button = event.target.closest("button[data-name]");
   if (!button) return;
   const speaker = window.currentSpeakers.find(s => s.name === button.dataset.name);
   post("/api/speaker", { name: speaker.name, volume: Math.max(0, Math.min(100, speaker.volume + Number(button.dataset.step))) });
 });
-document.getElementById("save").addEventListener("click", () => post("/api/save-match"));
+document.getElementById("pairs").addEventListener("click", event => {
+  const button = event.target.closest("button[data-delete]");
+  if (button) post("/api/delete-pair", { index: Number(button.dataset.delete) });
+});
+document.getElementById("save").addEventListener("click", () => post("/api/save-pair"));
 document.getElementById("reset").addEventListener("click", () => post("/api/reset"));
 
-async function refresh() { if (!masterRequestInFlight) render(await (await fetch("/api/state")).json()); }
+async function refresh() { if (!positionRequestInFlight) render(await (await fetch("/api/state")).json()); }
 refresh();
 setInterval(refresh, 3000);
 </script>
@@ -226,8 +248,7 @@ setInterval(refresh, 3000);
 
 def main() -> None:
     Handler.speakers_by_name = discover_speakers_by_name()
-    Handler.calibration = load_calibration(Handler.speakers_by_name)
-    save_calibration(Handler.calibration)
+    Handler.pairs = load_pairs()
     print("Speakers:", ", ".join(Handler.speakers_by_name))
     print(f"Open http://localhost:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

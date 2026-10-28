@@ -3,5 +3,6 @@ __pycache__/
 
 # Personal calibration data
 calibration.json
+calibration.backup.json
 
 .DS_Store
