@@ -87,6 +87,13 @@ final class BalanceModel: ObservableObject {
         }
     }
 
+    func stepPosition(by step: Int) {
+        guard let state else { return }
+        let position = min(state.maxPosition, max(0, Int(sliderPosition) + step))
+        sliderPosition = Double(position)
+        sendPosition(position)
+    }
+
     func nudge(_ speaker: SpeakerState, by step: Int) {
         let volume = min(100, max(0, speaker.volume + step))
         Task { await request(path: "/api/speaker", body: ["name": speaker.name, "volume": volume]) }
@@ -129,6 +136,7 @@ struct BalanceView: View {
             Text("Sonos Balance").font(.headline)
             if let state = model.state {
                 HStack {
+                    Button("−") { model.stepPosition(by: -1) }
                     Image(systemName: "speaker.fill").foregroundStyle(.secondary)
                     Slider(
                         value: Binding(
@@ -142,6 +150,7 @@ struct BalanceView: View {
                         step: 1
                     )
                     Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                    Button("+") { model.stepPosition(by: 1) }
                 }
                 Divider()
                 ForEach(state.speakers, id: \.name) { speaker in

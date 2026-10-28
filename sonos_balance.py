@@ -182,7 +182,7 @@ PAGE_HTML = """<!doctype html>
   .row + .row { margin-top: 12px; }
   .label { flex: 1; }
   .value { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
-  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
   button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--muted); background: transparent; color: var(--fg); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .hint { color: var(--muted); font-size: 14px; }
@@ -193,7 +193,11 @@ PAGE_HTML = """<!doctype html>
 <body><main>
   <h1>Sonos Balance</h1>
   <section>
-    <input type="range" id="volume" min="0" step="1">
+    <div class="row">
+      <button id="volume-down">−</button>
+      <input type="range" id="volume" min="0" step="1">
+      <button id="volume-up">+</button>
+    </div>
     <div class="hint">Use ← → keys for single steps. The slider stops where the first speaker reaches 100.</div>
   </section>
   <section>
@@ -244,6 +248,12 @@ async function sendPosition(position) {
 }
 
 volumeSlider.addEventListener("input", () => sendPosition(Number(volumeSlider.value)));
+function stepPosition(step) {
+  volumeSlider.value = Number(volumeSlider.value) + step;
+  sendPosition(Number(volumeSlider.value));
+}
+document.getElementById("volume-down").addEventListener("click", () => stepPosition(-1));
+document.getElementById("volume-up").addEventListener("click", () => stepPosition(1));
 document.getElementById("speakers").addEventListener("click", event => {
   const button = event.target.closest("button[data-name]");
   if (!button) return;
