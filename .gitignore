@@ -1,0 +1,7 @@
+# Runtime files
+__pycache__/
+
+# Personal calibration data
+calibration.json
+
+.DS_Store
