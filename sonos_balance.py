@@ -4,12 +4,14 @@
 # ///
 """One volume slider for grouped Sonos speakers that get loud at different rates.
 
-You save pairs of volumes that sound equally loud. The slider walks along those pairs,
-one volume step at a time, so the speakers stay balanced at every position.
+You save pairs of volumes that sound equally loud. The slider walks along a curve fitted
+through the newest saved pairs, one volume step at a time, so the speakers stay balanced
+at every position.
 """
 
 import json
-import sys
+import math
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,16 +19,19 @@ import soco
 
 CALIBRATION_PATH = Path(__file__).with_name("calibration.json")
 PORT = 8765
+MAX_SAVED_PAIRS = 50
 
 
 def discover_speakers_by_name() -> dict[str, soco.SoCo]:
-    speakers = soco.discover(timeout=8, allow_network_scan=True)
-    if not speakers:
-        sys.exit("No Sonos speakers found. Is this computer on the same network as the speakers?")
+    """Search until speakers answer. macOS blocks the search until Local Network access is allowed."""
+    while not (speakers := soco.discover(timeout=8, allow_network_scan=True)):
+        print("No Sonos speakers found. Check the network and macOS Local Network access. Trying again in 5 s.")
+        time.sleep(5)
     return {speaker.player_name: speaker for speaker in speakers}
 
 
 def load_pairs() -> list[dict[str, int]]:
+    """Saved pairs, oldest first."""
     if CALIBRATION_PATH.exists():
         return json.loads(CALIBRATION_PATH.read_text())["pairs"]
     return []
@@ -36,43 +41,55 @@ def save_pairs(pairs: list[dict[str, int]]) -> None:
     CALIBRATION_PATH.write_text(json.dumps({"pairs": pairs}, indent=2, ensure_ascii=False))
 
 
-def is_quieter_or_equal(pair: dict[str, int], other: dict[str, int]) -> bool:
-    return all(pair[name] <= other[name] for name in pair)
+def non_decreasing_fit(values: list[float]) -> list[float]:
+    """Closest non-decreasing sequence (pool adjacent violators): out-of-order runs become their mean."""
+    blocks: list[tuple[float, int]] = []
+    for value in values:
+        blocks.append((value, 1))
+        while len(blocks) > 1 and blocks[-2][0] > blocks[-1][0]:
+            (later_mean, later_count), (earlier_mean, earlier_count) = blocks.pop(), blocks.pop()
+            total_count = earlier_count + later_count
+            blocks.append(((earlier_mean * earlier_count + later_mean * later_count) / total_count, total_count))
+    return [mean for mean, count in blocks for _ in range(count)]
 
 
-def add_pair(pairs: list[dict[str, int]], new_pair: dict[str, int]) -> list[dict[str, int]]:
-    """Add a pair and drop the old pairs that contradict it.
+def fit_curve_anchors(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, float]]:
+    """Points on the curve, quietest first, with every speaker non-decreasing.
 
-    A pair contradicts the new one when one speaker is louder and the other is quieter,
-    because then the slider could not go up on both speakers at once.
+    Saved pairs disagree a little (ears are noisy), so each speaker gets a best fit instead of
+    the raw values.
     """
-    consistent_pairs = [
-        pair
-        for pair in pairs
-        if pair != new_pair and (is_quieter_or_equal(pair, new_pair) or is_quieter_or_equal(new_pair, pair))
+    ordered_pairs = sorted((pair for pair in pairs if any(pair.values())), key=lambda pair: sum(pair.values()))
+    fitted_volumes_by_name = {
+        name: non_decreasing_fit([pair[name] for pair in ordered_pairs]) for name in speaker_names
+    }
+    return [
+        {name: fitted_volumes_by_name[name][index] for name in speaker_names} for index in range(len(ordered_pairs))
     ]
-    return sorted(consistent_pairs + [new_pair], key=lambda pair: sum(pair.values()))
 
 
 def build_volume_steps(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, int]]:
     """Every slider position, from silent to the point where the first speaker reaches 100.
 
-    Between two pairs, the speaker that changes most moves one volume step per slider step
-    and the other speakers follow in proportion. Above the loudest pair, the volume ratio
-    of that pair continues.
+    Between two curve points, the speaker that changes most moves one volume step per slider
+    step and the other speakers follow in proportion. Above the loudest point, the volume
+    ratio of that point continues.
     """
-    if not pairs:
+    anchors = fit_curve_anchors(pairs, speaker_names)
+    if not anchors:
         return [{name: volume for name in speaker_names} for volume in range(101)]
-    loudest_pair = pairs[-1]
-    scale_to_max = 100 / max(loudest_pair.values())
-    top_pair = {name: round(loudest_pair[name] * scale_to_max) for name in speaker_names}
-    anchors = [{name: 0 for name in speaker_names}] + pairs + [top_pair]
-    steps = [anchors[0]]
+    loudest_anchor = anchors[-1]
+    scale_to_max = 100 / max(loudest_anchor.values())
+    top_anchor = {name: loudest_anchor[name] * scale_to_max for name in speaker_names}
+    anchors = [{name: 0 for name in speaker_names}] + anchors + [top_anchor]
+    steps = [{name: 0 for name in speaker_names}]
     for start, end in zip(anchors, anchors[1:]):
-        step_count = max(abs(end[name] - start[name]) for name in speaker_names)
+        step_count = math.ceil(max(abs(end[name] - start[name]) for name in speaker_names))
         for step in range(1, step_count + 1):
             fraction = step / step_count
-            steps.append({name: round(start[name] + fraction * (end[name] - start[name])) for name in speaker_names})
+            volumes = {name: round(start[name] + fraction * (end[name] - start[name])) for name in speaker_names}
+            if volumes != steps[-1]:
+                steps.append(volumes)
     return steps
 
 
@@ -102,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/speaker":
             self.speakers_by_name[body["name"]].volume = int(body["volume"])
         elif self.path == "/api/save-pair":
-            Handler.pairs = add_pair(self.pairs, self.current_volumes())
+            Handler.pairs = (self.pairs + [self.current_volumes()])[-MAX_SAVED_PAIRS:]
             save_pairs(self.pairs)
         elif self.path == "/api/delete-pair":
             del self.pairs[int(body["index"])]
@@ -132,6 +149,7 @@ class Handler(BaseHTTPRequestHandler):
             "position": nearest_step_index(steps, current_volumes),
             "max_position": len(steps) - 1,
             "pairs": self.pairs,
+            "max_saved_pairs": MAX_SAVED_PAIRS,
             "speakers": [{"name": name, "volume": volume} for name, volume in current_volumes.items()],
         }
 
@@ -181,10 +199,10 @@ PAGE_HTML = """<!doctype html>
   <section>
     <div id="speakers"></div>
     <div class="row"><button class="primary" id="save">Save pair</button><button id="reset">Delete all pairs</button></div>
-    <p class="hint">To calibrate: nudge each speaker until both sound equally loud, then save the pair. Louder levels continue the ratio of your loudest pair.</p>
+    <p class="hint">To calibrate: nudge each speaker until both sound equally loud, then save the pair. The curve is a best fit through your newest saved pairs. Louder levels continue the ratio of your loudest pair.</p>
   </section>
   <section>
-    <h2>Saved pairs</h2>
+    <h2 id="pairs-heading">Saved pairs</h2>
     <ul id="pairs"></ul>
   </section>
 </main>
@@ -207,6 +225,7 @@ function render(state) {
       <span class="value">${s.volume}</span>
       <button data-name="${s.name}" data-step="1">+</button>
     </div>`).join("");
+  document.getElementById("pairs-heading").textContent = `Saved pairs (${state.pairs.length} of ${state.max_saved_pairs}, oldest first)`;
   document.getElementById("pairs").innerHTML = state.pairs.length
     ? state.pairs.map((pair, index) => `
         <li><span>${Object.entries(pair).map(([name, volume]) => `${name} ${volume}`).join(" · ")}</span>

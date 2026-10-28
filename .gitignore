@@ -1,4 +1,8 @@
+# Build output (make with ./build.sh)
+SonosBalance.app/
+
 # Runtime files
+backend.log
 __pycache__/
 
 # Personal calibration data
