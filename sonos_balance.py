@@ -5,8 +5,8 @@
 """One volume slider for grouped Sonos speakers that get loud at different rates.
 
 You save pairs of volumes that sound equally loud. The slider walks along a curve fitted
-through the newest saved pairs, one volume step at a time, so the speakers stay balanced
-at every position.
+through the newest saved pairs, one step of the louder speaker at a time, so the speakers
+stay balanced at every position.
 """
 
 import json
@@ -59,7 +59,7 @@ def fit_curve_anchors(pairs: list[dict[str, int]], speaker_names: list[str]) -> 
     Saved pairs disagree a little (ears are noisy), so each speaker gets a best fit instead of
     the raw values.
     """
-    ordered_pairs = sorted((pair for pair in pairs if any(pair.values())), key=lambda pair: sum(pair.values()))
+    ordered_pairs = sorted((pair for pair in pairs if all(pair.values())), key=lambda pair: sum(pair.values()))
     fitted_volumes_by_name = {
         name: non_decreasing_fit([pair[name] for pair in ordered_pairs]) for name in speaker_names
     }
@@ -69,11 +69,13 @@ def fit_curve_anchors(pairs: list[dict[str, int]], speaker_names: list[str]) -> 
 
 
 def build_volume_steps(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, int]]:
-    """Every slider position, from silent to the point where the first speaker reaches 100.
+    """Every slider position, one for each volume of the louder speaker.
 
-    Between two curve points, the speaker that changes most moves one volume step per slider
-    step and the other speakers follow in proportion. Above the loudest point, the volume
-    ratio of that point continues.
+    The louder speaker has the lowest volume at the loudest curve point, so its steps are the
+    coarsest. Each position sets that speaker to a whole volume and the other speakers to the
+    curve at that exact volume, so no position sits between two steps of the louder speaker.
+    Above the loudest point, the volume ratio of that point continues until the next louder
+    speaker step would take a speaker above 100.
     """
     anchors = fit_curve_anchors(pairs, speaker_names)
     if not anchors:
@@ -81,12 +83,20 @@ def build_volume_steps(pairs: list[dict[str, int]], speaker_names: list[str]) ->
     loudest_anchor = anchors[-1]
     scale_to_max = 100 / max(loudest_anchor.values())
     top_anchor = {name: loudest_anchor[name] * scale_to_max for name in speaker_names}
-    anchors = [{name: 0 for name in speaker_names}] + anchors + [top_anchor]
+    louder_speaker = min(speaker_names, key=top_anchor.__getitem__)
+
+    anchors_by_louder_volume: dict[float, list[dict[str, float]]] = {}
+    for anchor in [{name: 0 for name in speaker_names}, *anchors, top_anchor]:
+        anchors_by_louder_volume.setdefault(anchor[louder_speaker], []).append(anchor)
+    merged_anchors = [
+        {name: sum(anchor[name] for anchor in same_volume_anchors) / len(same_volume_anchors) for name in speaker_names}
+        for _, same_volume_anchors in sorted(anchors_by_louder_volume.items())
+    ]
+
     steps = [{name: 0 for name in speaker_names}]
-    for start, end in zip(anchors, anchors[1:]):
-        step_count = math.ceil(max(abs(end[name] - start[name]) for name in speaker_names))
-        for step in range(1, step_count + 1):
-            fraction = step / step_count
+    for start, end in zip(merged_anchors, merged_anchors[1:]):
+        for louder_volume in range(math.ceil(start[louder_speaker]), math.floor(end[louder_speaker]) + 1):
+            fraction = (louder_volume - start[louder_speaker]) / (end[louder_speaker] - start[louder_speaker])
             volumes = {name: round(start[name] + fraction * (end[name] - start[name])) for name in speaker_names}
             if volumes != steps[-1]:
                 steps.append(volumes)
