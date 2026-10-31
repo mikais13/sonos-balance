@@ -14,6 +14,7 @@ import math
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from statistics import linear_regression, mean
 
 import soco
 
@@ -41,65 +42,43 @@ def save_pairs(pairs: list[dict[str, int]]) -> None:
     CALIBRATION_PATH.write_text(json.dumps({"pairs": pairs}, indent=2, ensure_ascii=False))
 
 
-def non_decreasing_fit(values: list[float]) -> list[float]:
-    """Closest non-decreasing sequence (pool adjacent violators): out-of-order runs become their mean."""
-    blocks: list[tuple[float, int]] = []
-    for value in values:
-        blocks.append((value, 1))
-        while len(blocks) > 1 and blocks[-2][0] > blocks[-1][0]:
-            (later_mean, later_count), (earlier_mean, earlier_count) = blocks.pop(), blocks.pop()
-            total_count = earlier_count + later_count
-            blocks.append(((earlier_mean * earlier_count + later_mean * later_count) / total_count, total_count))
-    return [mean for mean, count in blocks for _ in range(count)]
+def fit_power_curve(reference_volumes: list[int], volumes: list[int]) -> tuple[float, float]:
+    """Scale and exponent of volume = scale * reference_volume ** exponent, a least squares fit on log volumes.
 
-
-def fit_curve_anchors(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, float]]:
-    """Points on the curve, quietest first, with every speaker non-decreasing.
-
-    Saved pairs disagree a little (ears are noisy), so each speaker gets a best fit instead of
-    the raw values.
+    A single reference volume cannot show a bend, so that case keeps a constant ratio. The exponent
+    is never negative, so a volume never drops when the reference volume goes up.
     """
-    ordered_pairs = sorted((pair for pair in pairs if all(pair.values())), key=lambda pair: sum(pair.values()))
-    fitted_volumes_by_name = {
-        name: non_decreasing_fit([pair[name] for pair in ordered_pairs]) for name in speaker_names
-    }
-    return [
-        {name: fitted_volumes_by_name[name][index] for name in speaker_names} for index in range(len(ordered_pairs))
-    ]
+    log_reference_volumes = [math.log(volume) for volume in reference_volumes]
+    log_volumes = [math.log(volume) for volume in volumes]
+    exponent = 1.0
+    if len(set(reference_volumes)) > 1:
+        exponent = max(linear_regression(log_reference_volumes, log_volumes).slope, 0.0)
+    return math.exp(mean(log_volumes) - exponent * mean(log_reference_volumes)), exponent
 
 
 def build_volume_steps(pairs: list[dict[str, int]], speaker_names: list[str]) -> list[dict[str, int]]:
     """Every slider position, one for each volume of the louder speaker.
 
-    The louder speaker has the lowest volume at the loudest curve point, so its steps are the
-    coarsest. Each position sets that speaker to a whole volume and the other speakers to the
-    curve at that exact volume, so no position sits between two steps of the louder speaker.
-    Above the loudest point, the volume ratio of that point continues until the next louder
-    speaker step would take a speaker above 100.
+    The louder speaker has the lowest saved volumes, so its steps are the coarsest. A smooth curve
+    gives each other speaker its volume, so saved pairs set the curve on average and no single
+    pair pulls it. The positions stop before any speaker would go above 100.
     """
-    anchors = fit_curve_anchors(pairs, speaker_names)
-    if not anchors:
+    audible_pairs = [pair for pair in pairs if all(pair[name] for name in speaker_names)]
+    if not audible_pairs:
         return [{name: volume for name in speaker_names} for volume in range(101)]
-    loudest_anchor = anchors[-1]
-    scale_to_max = 100 / max(loudest_anchor.values())
-    top_anchor = {name: loudest_anchor[name] * scale_to_max for name in speaker_names}
-    louder_speaker = min(speaker_names, key=top_anchor.__getitem__)
-
-    anchors_by_louder_volume: dict[float, list[dict[str, float]]] = {}
-    for anchor in [{name: 0 for name in speaker_names}, *anchors, top_anchor]:
-        anchors_by_louder_volume.setdefault(anchor[louder_speaker], []).append(anchor)
-    merged_anchors = [
-        {name: sum(anchor[name] for anchor in same_volume_anchors) / len(same_volume_anchors) for name in speaker_names}
-        for _, same_volume_anchors in sorted(anchors_by_louder_volume.items())
-    ]
-
+    louder_speaker = min(speaker_names, key=lambda name: sum(pair[name] for pair in audible_pairs))
+    louder_speaker_volumes = [pair[louder_speaker] for pair in audible_pairs]
+    curves_by_name = {
+        name: fit_power_curve(louder_speaker_volumes, [pair[name] for pair in audible_pairs]) for name in speaker_names
+    }
     steps = [{name: 0 for name in speaker_names}]
-    for start, end in zip(merged_anchors, merged_anchors[1:]):
-        for louder_volume in range(math.ceil(start[louder_speaker]), math.floor(end[louder_speaker]) + 1):
-            fraction = (louder_volume - start[louder_speaker]) / (end[louder_speaker] - start[louder_speaker])
-            volumes = {name: round(start[name] + fraction * (end[name] - start[name])) for name in speaker_names}
-            if volumes != steps[-1]:
-                steps.append(volumes)
+    for louder_volume in range(1, 101):
+        volumes = {
+            name: round(scale * louder_volume**exponent) for name, (scale, exponent) in curves_by_name.items()
+        }
+        if max(volumes.values()) > 100:
+            break
+        steps.append(volumes)
     return steps
 
 

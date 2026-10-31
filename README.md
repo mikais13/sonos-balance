@@ -7,9 +7,9 @@ Sonos changes the volume of all speakers in a group by the same amount. An Era 1
 ## How it works
 
 1. You set the two speakers so that they sound equally loud, then save the pair.
-2. The app fits a curve through your newest 50 saved pairs. When saved pairs disagree a little, the app uses their average.
-3. Each slider step moves the louder speaker (the speaker with the lower volume number) by exactly one step, and sets the other speaker to the matching point on the curve. Neither speaker gets quieter when you move the slider up.
-4. Above your loudest pair, the curve keeps the same ratio between the speakers. The slider stops at the last step that keeps both speakers at 100 or below. Thus you do not have to calibrate at high volume.
+2. The app fits one smooth curve through your newest 50 saved pairs. The curve follows the pairs on average and does not go through each pair exactly.
+3. Each slider step moves the louder speaker (the speaker with the lower volume number) by exactly one step, and sets the other speaker from the curve. Neither speaker gets quieter when you move the slider up.
+4. Above your loudest pair, the same curve continues. The slider stops at the last step that keeps both speakers at 100 or below. Thus you do not have to calibrate at high volume, but one pair near the top makes that part of the curve more accurate.
 
 ## Requirements
 
