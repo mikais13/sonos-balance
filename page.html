@@ -41,6 +41,16 @@
     <ul id="pairs"></ul>
   </section>
 </main>
+<template id="speaker-row">
+  <div class="row">
+    <span class="label"></span>
+    <button data-step="-1">−</button>
+    <span class="value"></span>
+    <button data-step="1">+</button>
+  </div>
+</template>
+<template id="pair-row"><li><span></span><button>×</button></li></template>
+<template id="no-pairs-row"><li class="hint">No pairs yet. Both speakers use the same volume.</li></template>
 <script>
 const volumeSlider = document.getElementById("volume");
 let positionRequestInFlight = false, pendingPosition = null;
@@ -53,20 +63,29 @@ async function post(path, body) {
 function render(state) {
   volumeSlider.max = state.max_position;
   if (!positionRequestInFlight) volumeSlider.value = state.position;
-  document.getElementById("speakers").innerHTML = state.speakers.map(s => `
-    <div class="row">
-      <span class="label">${s.name}</span>
-      <button data-name="${s.name}" data-step="-1">−</button>
-      <span class="value">${s.volume}</span>
-      <button data-name="${s.name}" data-step="1">+</button>
-    </div>`).join("");
+  document.getElementById("speakers").replaceChildren(...state.speakers.map(buildSpeakerRow));
   document.getElementById("pairs-heading").textContent = `Saved pairs (${state.pairs.length} of ${state.max_saved_pairs}, oldest first)`;
-  document.getElementById("pairs").innerHTML = state.pairs.length
-    ? state.pairs.map((pair, index) => `
-        <li><span>${Object.entries(pair).map(([name, volume]) => `${name} ${volume}`).join(" · ")}</span>
-        <button data-delete="${index}">×</button></li>`).join("")
-    : `<li class="hint">No pairs yet. Both speakers use the same volume.</li>`;
+  document.getElementById("pairs").replaceChildren(...(state.pairs.length ? state.pairs.map(buildPairRow) : [cloneTemplate("no-pairs-row")]));
   window.currentSpeakers = state.speakers;
+}
+
+function cloneTemplate(templateId) {
+  return document.getElementById(templateId).content.firstElementChild.cloneNode(true);
+}
+
+function buildSpeakerRow(speaker) {
+  const row = cloneTemplate("speaker-row");
+  row.querySelector(".label").textContent = speaker.name;
+  row.querySelector(".value").textContent = speaker.volume;
+  row.querySelectorAll("button").forEach(button => { button.dataset.name = speaker.name; });
+  return row;
+}
+
+function buildPairRow(pair, index) {
+  const row = cloneTemplate("pair-row");
+  row.querySelector("span").textContent = Object.entries(pair).map(([name, volume]) => `${name} ${volume}`).join(" · ");
+  row.querySelector("button").dataset.delete = index;
+  return row;
 }
 
 // Send at most one position request at a time; keep only the newest value while waiting.
