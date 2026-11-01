@@ -34,7 +34,7 @@
   <section>
     <div id="speakers"></div>
     <div class="row"><button class="primary" id="save">Save pair</button><button id="reset">Delete all pairs</button></div>
-    <p class="hint">To calibrate: nudge each speaker until both sound equally loud, then save the pair. The curve is a best fit through your newest saved pairs. Louder levels continue the ratio of your loudest pair.</p>
+    <p class="hint">To calibrate: nudge each speaker until they all sound equally loud, then save the pair. The curve is a best fit through your newest saved pairs, and it continues past your loudest pair.</p>
   </section>
   <section>
     <h2 id="pairs-heading">Saved pairs</h2>
@@ -50,7 +50,7 @@
   </div>
 </template>
 <template id="pair-row"><li><span></span><button>×</button></li></template>
-<template id="no-pairs-row"><li class="hint">No pairs yet. Both speakers use the same volume.</li></template>
+<template id="no-pairs-row"><li class="hint">No pairs yet. All speakers use the same volume.</li></template>
 <script>
 const volumeSlider = document.getElementById("volume");
 let positionRequestInFlight = false, pendingPosition = null;
