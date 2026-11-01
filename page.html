@@ -63,10 +63,23 @@ async function post(path, body) {
 function render(state) {
   volumeSlider.max = state.max_position;
   if (!positionRequestInFlight) volumeSlider.value = state.position;
-  document.getElementById("speakers").replaceChildren(...state.speakers.map(buildSpeakerRow));
+  const speakerRows = document.getElementById("speakers");
+  rebuildRowsWhenDataChanges(speakerRows, state.speakers.map(speaker => speaker.name), () => state.speakers.map(buildSpeakerRow));
+  state.speakers.forEach((speaker, index) => {
+    speakerRows.children[index].querySelector(".value").textContent = speaker.volume;
+  });
   document.getElementById("pairs-heading").textContent = `Saved pairs (${state.pairs.length} of ${state.max_saved_pairs}, oldest first)`;
-  document.getElementById("pairs").replaceChildren(...(state.pairs.length ? state.pairs.map(buildPairRow) : [cloneTemplate("no-pairs-row")]));
+  rebuildRowsWhenDataChanges(document.getElementById("pairs"), state.pairs, () =>
+    state.pairs.length ? state.pairs.map(buildPairRow) : [cloneTemplate("no-pairs-row")]);
   window.currentSpeakers = state.speakers;
+}
+
+// Replacing a row loses keyboard focus and can swallow a click, so a poll with the same data keeps the rows.
+function rebuildRowsWhenDataChanges(container, rowData, buildRows) {
+  const serializedRowData = JSON.stringify(rowData);
+  if (container.dataset.renderedRowData === serializedRowData) return;
+  container.dataset.renderedRowData = serializedRowData;
+  container.replaceChildren(...buildRows());
 }
 
 function cloneTemplate(templateId) {
