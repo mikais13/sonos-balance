@@ -1,8 +1,10 @@
 # Sonos Balance
 
-A small menu bar app for balancing the volumes of my sonos speakers.
+A small menu bar app for balancing the volumes of my Sonos speakers.
 I have a Sonos Roam and a Sonos Era 100 which I like to pair together when at my desk but struggle to keep them at a similar volume and I find other apps not the best at this (i.e. the slider in the Sonos app or Spotify connect).
 This app lets me calibrate the two speakers at a few different volumes, then it calculates a smooth curve that keeps them balanced at every slider position.
+
+This project is not affiliated with or endorsed by Sonos.
 
 ## How it works
 
@@ -13,7 +15,7 @@ This app lets me calibrate the two speakers at a few different volumes, then it 
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 14 or later on Apple silicon
 - [uv](https://docs.astral.sh/uv/)
 - Xcode or the Xcode Command Line Tools (to build the app)
 - This computer and the speakers on the same network (speakers must be paired via Wi-Fi not Bluetooth)
@@ -61,7 +63,7 @@ uv run sonos_balance.py
 
 - The curve applies only when you change the volume with this app. The Sonos app and the buttons on the speakers still change the group volume in the Sonos way. When the volumes change, the slider moves to the nearest balanced position.
 - The app and the web page poll the speaker volumes every 3 seconds, and the menu also refreshes each time it opens. A change made on a speaker or in the Sonos app can take up to 3 seconds to show.
-- Different Sonos speakers have different volume step sizes. The app calculates the step size for each speaker and uses that to keep them balanced. This may not be perfect, but it is better than the Sonos app which does not take this into account at all.
+- Different Sonos speakers get louder at different rates. The app learns this only from your saved pairs, so the balance is as good as those pairs. This may not be perfect, but it is better than the Sonos app which does not take this into account at all.
 
 ## Problems
 
