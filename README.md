@@ -60,7 +60,7 @@ uv run sonos_balance.py
 ## Limits
 
 - The curve applies only when you change the volume with this app. The Sonos app and the buttons on the speakers still change the group volume in the Sonos way. When the volumes change, the slider moves to the nearest balanced position.
-- Speaker volume only updates when opening the app or moving the slider, while open any changes made on device or elsewhere are not reflected until closed and opened.
+- The app and the web page poll the speaker volumes every 3 seconds, and the menu also refreshes each time it opens. A change made on a speaker or in the Sonos app can take up to 3 seconds to show.
 - Different Sonos speakers have different volume step sizes. The app calculates the step size for each speaker and uses that to keep them balanced. This may not be perfect, but it is better than the Sonos app which does not take this into account at all.
 
 ## Problems
