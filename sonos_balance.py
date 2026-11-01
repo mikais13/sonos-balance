@@ -24,6 +24,7 @@ DATABASE_PATH = Path(__file__).with_name("calibration.db")
 PAGE_PATH = Path(__file__).with_name("page.html")
 PORT = 8765
 MAX_SAVED_PAIRS = 50
+ALLOWED_ORIGINS = {f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"}
 
 
 def discover_speakers_by_name() -> dict[str, soco.SoCo]:
@@ -131,6 +132,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            # Browsers send Origin on every POST, so other websites stop here. The menu bar app sends none.
+            self.send_error(403)
+            return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/api/position":
             self.set_volumes(self.volume_steps()[int(body["position"])])
