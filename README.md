@@ -1,8 +1,8 @@
 # Sonos Balance
 
-One volume slider for grouped Sonos speakers that get loud at different rates (here: an Era 100 and a Roam).
-
-Sonos changes the volume of all speakers in a group by the same amount. An Era 100 gets louder faster than a Roam, so the balance between them changes as you turn the volume up or down. This app uses a separate volume for each speaker, so that they stay balanced at every slider position.
+A small menu bar app for balancing the volumes of my sonos speakers.
+I have a Sonos Roam and a Sonos Era 100 which I like to pair together when at my desk but struggle to keep them at a similar volume and I find other apps not the best at this (i.e. the slider in the Sonos app or Spotify connect).
+This app lets me calibrate the two speakers at a few different volumes, then it calculates a smooth curve that keeps them balanced at every slider position.
 
 ## How it works
 
@@ -16,7 +16,7 @@ Sonos changes the volume of all speakers in a group by the same amount. An Era 1
 - macOS 14 or later
 - [uv](https://docs.astral.sh/uv/)
 - Xcode or the Xcode Command Line Tools (to build the app)
-- This computer and the speakers on the same network. The Roam must use Wi-Fi, not Bluetooth.
+- This computer and the speakers on the same network (speakers must be paired via Wi-Fi not Bluetooth)
 
 ## Build
 
@@ -34,25 +34,7 @@ open SonosBalance.app
 
 A speaker icon shows in the menu bar. On the first start, macOS asks for permission to find devices on your local network. Click **Allow**. If macOS does not ask, go to System Settings → Privacy & Security → Local Network and turn on Sonos Balance.
 
-The app starts the Python engine (`sonos_balance.py`) and stops it when you quit. You do not need a terminal.
-
-## Use
-
-Click the menu bar icon. The menu shows:
-
-- **Slider**: the volume of the group.
-- **− / +** for each speaker: change one speaker by one step.
-- **Save pair**: save the current volumes as a balanced pair.
-- **Quit Sonos Balance**
-
-## Calibrate
-
-1. Play music at a comfortable volume.
-2. Use **−** and **+** until the two speakers sound equally loud.
-3. Click **Save pair**.
-4. Do steps 2–3 again at a few different volumes, for example quiet, normal and a little loud.
-
-You can calibrate again at any time. A new pair goes into the list, and the oldest pair is removed when there are more than 50. The curve changes immediately.
+The app starts the Python engine (`sonos_balance.py`) and stops it when you quit.
 
 ## Web page
 
@@ -66,18 +48,19 @@ uv run sonos_balance.py
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `sonos_balance.py` | Engine: finds the speakers, calculates the curve, serves the web page and the API on port 8765 |
-| `SonosBalance.swift` | Menu bar app |
-| `build.sh` | Builds `SonosBalance.app` |
-| `calibration.db` | SQLite database with your saved pairs. On the first start, the app imports them from `calibration.json` if that file exists |
-| `backend.log` | Engine output when it is started by the app |
+| File                 | Purpose                                                                                                                     |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sonos_balance.py`   | Engine: finds the speakers, calculates the curve, serves the web page and the API on port 8765                              |
+| `SonosBalance.swift` | Menu bar app                                                                                                                |
+| `build.sh`           | Builds `SonosBalance.app`                                                                                                   |
+| `calibration.db`     | SQLite database with your saved pairs. On the first start, the app imports them from `calibration.json` if that file exists |
+| `backend.log`        | Engine output when it is started by the app                                                                                 |
 
 ## Limits
 
 - The curve applies only when you change the volume with this app. The Sonos app and the buttons on the speakers still change the group volume in the Sonos way. When the volumes change, the slider moves to the nearest balanced position.
-- The Era 100 has larger volume steps than the Roam. One Era 100 step is approximately three Roam steps. Thus each slider step changes the Era 100 by one and the Roam by approximately three. The **− / +** buttons for each speaker still give the small steps that you use to calibrate.
+- Speaker volume only updates when opening the app or moving the slider, while open any changes made on device or elsewhere are not reflected until closed and opened.
+- Different Sonos speakers have different volume step sizes. The app calculates the step size for each speaker and uses that to keep them balanced. This may not be perfect, but it is better than the Sonos app which does not take this into account at all.
 
 ## Problems
 
