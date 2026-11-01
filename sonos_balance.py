@@ -22,6 +22,7 @@ import soco
 
 DATABASE_PATH = Path(__file__).with_name("calibration.db")
 LEGACY_CALIBRATION_PATH = Path(__file__).with_name("calibration.json")
+PAGE_PATH = Path(__file__).with_name("page.html")
 PORT = 8765
 MAX_SAVED_PAIRS = 50
 
@@ -130,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/":
-            self.send_body(PAGE_HTML.encode(), "text/html; charset=utf-8")
+            self.send_body(PAGE_PATH.read_bytes(), "text/html; charset=utf-8")
         elif self.path == "/api/state":
             self.send_json(self.state())
         else:
@@ -189,114 +190,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
-
-
-PAGE_HTML = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sonos Balance</title>
-<style>
-  :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1b; --muted: #77756f; --card: #fff; --accent: #c2410c; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe7; --muted: #9a978f; --card: #222220; --accent: #fb923c; } }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
-  main { max-width: 520px; margin: 0 auto; padding: 24px 16px; }
-  h1 { font-size: 20px; margin: 0 0 16px; }
-  h2 { font-size: 15px; margin: 0 0 8px; }
-  section { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .row { display: flex; align-items: center; gap: 12px; }
-  .row + .row { margin-top: 12px; }
-  .label { flex: 1; }
-  .value { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
-  input[type=range] { flex: 1; accent-color: var(--accent); }
-  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--muted); background: transparent; color: var(--fg); cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .hint { color: var(--muted); font-size: 14px; }
-  ul { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
-  li { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
-  li button { padding: 2px 8px; }
-</style></head>
-<body><main>
-  <h1>Sonos Balance</h1>
-  <section>
-    <div class="row">
-      <button id="volume-down">−</button>
-      <input type="range" id="volume" min="0" step="1">
-      <button id="volume-up">+</button>
-    </div>
-    <div class="hint">Use ← → keys for single steps. The slider stops where the first speaker reaches 100.</div>
-  </section>
-  <section>
-    <div id="speakers"></div>
-    <div class="row"><button class="primary" id="save">Save pair</button><button id="reset">Delete all pairs</button></div>
-    <p class="hint">To calibrate: nudge each speaker until both sound equally loud, then save the pair. The curve is a best fit through your newest saved pairs. Louder levels continue the ratio of your loudest pair.</p>
-  </section>
-  <section>
-    <h2 id="pairs-heading">Saved pairs</h2>
-    <ul id="pairs"></ul>
-  </section>
-</main>
-<script>
-const volumeSlider = document.getElementById("volume");
-let positionRequestInFlight = false, pendingPosition = null;
-
-async function post(path, body) {
-  const response = await fetch(path, { method: "POST", body: JSON.stringify(body || {}) });
-  render(await response.json());
-}
-
-function render(state) {
-  volumeSlider.max = state.max_position;
-  if (!positionRequestInFlight) volumeSlider.value = state.position;
-  document.getElementById("speakers").innerHTML = state.speakers.map(s => `
-    <div class="row">
-      <span class="label">${s.name}</span>
-      <button data-name="${s.name}" data-step="-1">−</button>
-      <span class="value">${s.volume}</span>
-      <button data-name="${s.name}" data-step="1">+</button>
-    </div>`).join("");
-  document.getElementById("pairs-heading").textContent = `Saved pairs (${state.pairs.length} of ${state.max_saved_pairs}, oldest first)`;
-  document.getElementById("pairs").innerHTML = state.pairs.length
-    ? state.pairs.map((pair, index) => `
-        <li><span>${Object.entries(pair).map(([name, volume]) => `${name} ${volume}`).join(" · ")}</span>
-        <button data-delete="${index}">×</button></li>`).join("")
-    : `<li class="hint">No pairs yet. Both speakers use the same volume.</li>`;
-  window.currentSpeakers = state.speakers;
-}
-
-// Send at most one position request at a time; keep only the newest value while waiting.
-async function sendPosition(position) {
-  if (positionRequestInFlight) { pendingPosition = position; return; }
-  positionRequestInFlight = true;
-  await post("/api/position", { position });
-  positionRequestInFlight = false;
-  if (pendingPosition !== null) { const next = pendingPosition; pendingPosition = null; sendPosition(next); }
-}
-
-volumeSlider.addEventListener("input", () => sendPosition(Number(volumeSlider.value)));
-function stepPosition(step) {
-  volumeSlider.value = Number(volumeSlider.value) + step;
-  sendPosition(Number(volumeSlider.value));
-}
-document.getElementById("volume-down").addEventListener("click", () => stepPosition(-1));
-document.getElementById("volume-up").addEventListener("click", () => stepPosition(1));
-document.getElementById("speakers").addEventListener("click", event => {
-  const button = event.target.closest("button[data-name]");
-  if (!button) return;
-  const speaker = window.currentSpeakers.find(s => s.name === button.dataset.name);
-  post("/api/speaker", { name: speaker.name, volume: Math.max(0, Math.min(100, speaker.volume + Number(button.dataset.step))) });
-});
-document.getElementById("pairs").addEventListener("click", event => {
-  const button = event.target.closest("button[data-delete]");
-  if (button) post("/api/delete-pair", { index: Number(button.dataset.delete) });
-});
-document.getElementById("save").addEventListener("click", () => post("/api/save-pair"));
-document.getElementById("reset").addEventListener("click", () => post("/api/reset"));
-
-async function refresh() { if (!positionRequestInFlight) render(await (await fetch("/api/state")).json()); }
-refresh();
-setInterval(refresh, 3000);
-</script>
-</body></html>
-"""
 
 
 def main() -> None:

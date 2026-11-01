@@ -51,6 +51,7 @@ uv run sonos_balance.py
 | File                 | Purpose                                                                                                                     |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `sonos_balance.py`   | Engine: finds the speakers, calculates the curve, serves the web page and the API on port 8765                              |
+| `page.html`          | Web page, read by the engine for each request                                                                               |
 | `SonosBalance.swift` | Menu bar app                                                                                                                |
 | `build.sh`           | Builds `SonosBalance.app`                                                                                                   |
 | `calibration.db`     | SQLite database with your saved pairs. On the first start, the app imports them from `calibration.json` if that file exists |
