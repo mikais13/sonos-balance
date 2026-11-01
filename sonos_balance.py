@@ -11,14 +11,17 @@ stay balanced at every position.
 
 import json
 import math
+import sqlite3
 import time
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from statistics import linear_regression, mean
 
 import soco
 
-CALIBRATION_PATH = Path(__file__).with_name("calibration.json")
+DATABASE_PATH = Path(__file__).with_name("calibration.db")
+LEGACY_CALIBRATION_PATH = Path(__file__).with_name("calibration.json")
 PORT = 8765
 MAX_SAVED_PAIRS = 50
 
@@ -31,15 +34,47 @@ def discover_speakers_by_name() -> dict[str, soco.SoCo]:
     return {speaker.player_name: speaker for speaker in speakers}
 
 
+def open_database() -> sqlite3.Connection:
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS saved_pair_volumes (
+            pair_index INTEGER NOT NULL,
+            speaker_name TEXT NOT NULL,
+            volume INTEGER NOT NULL,
+            PRIMARY KEY (pair_index, speaker_name)
+        )"""
+    )
+    return connection
+
+
 def load_pairs() -> list[dict[str, int]]:
     """Saved pairs, oldest first."""
-    if CALIBRATION_PATH.exists():
-        return json.loads(CALIBRATION_PATH.read_text())["pairs"]
-    return []
+    with closing(open_database()) as connection:
+        rows = connection.execute(
+            "SELECT pair_index, speaker_name, volume FROM saved_pair_volumes ORDER BY pair_index"
+        ).fetchall()
+    volumes_by_pair_index: dict[int, dict[str, int]] = {}
+    for pair_index, speaker_name, volume in rows:
+        volumes_by_pair_index.setdefault(pair_index, {})[speaker_name] = volume
+    return list(volumes_by_pair_index.values())
 
 
 def save_pairs(pairs: list[dict[str, int]]) -> None:
-    CALIBRATION_PATH.write_text(json.dumps({"pairs": pairs}, indent=2, ensure_ascii=False))
+    """Replace all saved pairs in one transaction."""
+    rows = [
+        (pair_index, speaker_name, volume)
+        for pair_index, pair in enumerate(pairs)
+        for speaker_name, volume in pair.items()
+    ]
+    with closing(open_database()) as connection, connection:
+        connection.execute("DELETE FROM saved_pair_volumes")
+        connection.executemany("INSERT INTO saved_pair_volumes VALUES (?, ?, ?)", rows)
+
+
+def import_json_pairs_into_new_database() -> None:
+    """Keep the pairs from calibration.json the first time the database is made."""
+    if LEGACY_CALIBRATION_PATH.exists() and not DATABASE_PATH.exists():
+        save_pairs(json.loads(LEGACY_CALIBRATION_PATH.read_text())["pairs"])
 
 
 def fit_power_curve(reference_volumes: list[int], volumes: list[int]) -> tuple[float, float]:
@@ -266,6 +301,7 @@ setInterval(refresh, 3000);
 
 def main() -> None:
     Handler.speakers_by_name = discover_speakers_by_name()
+    import_json_pairs_into_new_database()
     Handler.pairs = load_pairs()
     print("Speakers:", ", ".join(Handler.speakers_by_name))
     print(f"Open http://localhost:{PORT}")
