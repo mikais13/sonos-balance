@@ -7,7 +7,5 @@ __pycache__/
 
 # Personal calibration data
 calibration.db
-calibration.json
-calibration.backup.json
 
 .DS_Store

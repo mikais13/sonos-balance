@@ -54,7 +54,7 @@ uv run sonos_balance.py
 | `page.html`          | Web page, read by the engine for each request                                                                               |
 | `SonosBalance.swift` | Menu bar app                                                                                                                |
 | `build.sh`           | Builds `SonosBalance.app`                                                                                                   |
-| `calibration.db`     | SQLite database with your saved pairs. On the first start, the app imports them from `calibration.json` if that file exists |
+| `calibration.db`     | SQLite database with your saved pairs                                                                                       |
 | `backend.log`        | Engine output when it is started by the app                                                                                 |
 
 ## Limits
